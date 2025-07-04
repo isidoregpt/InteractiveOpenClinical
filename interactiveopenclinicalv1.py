@@ -12,38 +12,74 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import scipy.stats as stats
-from scipy.stats import chi2_contingency, ttest_ind, mannwhitneyu, fisher_exact
-
-# Compatibility fix for statsmodels/scipy issue
-try:
-    # Try to import statsmodels normally first
-    import statsmodels.api as sm
-    from statsmodels.formula.api import ols
-except ImportError as e:
-    if "_lazywhere" in str(e):
-        # Apply the compatibility workaround
-        import scipy
-        from numpy import where as _lazywhere
-        # Monkey patch the missing function
-        if not hasattr(scipy._lib._util, '_lazywhere'):
-            scipy._lib._util._lazywhere = _lazywhere
-        
-        # Now try importing again
-        import statsmodels.api as sm
-        from statsmodels.formula.api import ols
-        
-        st.warning("⚠️ Applied compatibility fix for statsmodels/scipy versions")
-    else:
-        # Different import error, re-raise
-        raise
-
 from datetime import datetime
 import warnings
 import json
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 from io import BytesIO
+
+# Robust statistical imports with fallbacks
+SCIPY_AVAILABLE = False
+STATSMODELS_AVAILABLE = False
+
+try:
+    import scipy.stats as stats
+    from scipy.stats import chi2_contingency, ttest_ind, mannwhitneyu, fisher_exact
+    SCIPY_AVAILABLE = True
+    st.success("✅ Scipy loaded successfully")
+except ImportError as e:
+    st.warning(f"⚠️ Scipy not available: {str(e)}")
+    # Create fallback functions
+    class FallbackStats:
+        @staticmethod
+        def ttest_ind(a, b):
+            # Simple t-test approximation
+            mean_a, mean_b = np.mean(a), np.mean(b)
+            var_a, var_b = np.var(a, ddof=1), np.var(b, ddof=1)
+            n_a, n_b = len(a), len(b)
+            
+            # Pooled standard error
+            pooled_se = np.sqrt(var_a/n_a + var_b/n_b)
+            t_stat = (mean_a - mean_b) / pooled_se if pooled_se > 0 else 0
+            
+            # Approximate p-value (simplified)
+            from math import exp
+            p_value = 2 * (1 - (1 / (1 + exp(-abs(t_stat)))))
+            
+            return t_stat, p_value
+    
+    stats = FallbackStats()
+
+try:
+    # Try different approaches for statsmodels
+    import statsmodels.api as sm
+    from statsmodels.formula.api import ols
+    STATSMODELS_AVAILABLE = True
+    st.success("✅ Statsmodels loaded successfully")
+except ImportError as e:
+    st.warning(f"⚠️ Statsmodels not available: {str(e)}")
+    # Create fallback
+    class FallbackStatsmodels:
+        class OLS:
+            def __init__(self, formula, data):
+                self.formula = formula
+                self.data = data
+                self.fitted = False
+            
+            def fit(self):
+                self.fitted = True
+                # Create a mock result object
+                class MockResult:
+                    def __init__(self):
+                        self.params = {'group': 0.0, 'intercept': 0.0}
+                        self.pvalues = {'group': 0.5, 'intercept': 0.1}
+                        self.rsquared = 0.1
+                        self.rsquared_adj = 0.05
+                return MockResult()
+    
+    def ols(formula, data):
+        return FallbackStatsmodels.OLS(formula, data)
 
 warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +92,19 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Display availability status
+with st.sidebar:
+    st.markdown("### 📊 Statistical Libraries Status")
+    if SCIPY_AVAILABLE:
+        st.success("✅ Scipy: Available")
+    else:
+        st.warning("⚠️ Scipy: Using fallback")
+    
+    if STATSMODELS_AVAILABLE:
+        st.success("✅ Statsmodels: Available")
+    else:
+        st.warning("⚠️ Statsmodels: Using fallback")
 
 # Custom CSS for interactive features
 st.markdown("""
@@ -324,7 +373,9 @@ class InteractiveAnalyzer:
             'group_variable': group_var,
             'groups': groups,
             'covariates': covariates or [],
-            'active_filters': list(st.session_state.current_filters.keys())
+            'active_filters': list(st.session_state.current_filters.keys()),
+            'scipy_available': SCIPY_AVAILABLE,
+            'statsmodels_available': STATSMODELS_AVAILABLE
         }
         
         try:
@@ -347,8 +398,11 @@ class InteractiveAnalyzer:
             group0_data = clean_data[clean_data[group_var] == groups[0]][outcome_var]
             group1_data = clean_data[clean_data[group_var] == groups[1]][outcome_var]
             
-            # Independent t-test
-            t_stat, p_value = ttest_ind(group0_data, group1_data)
+            # Independent t-test (using available implementation)
+            if SCIPY_AVAILABLE:
+                t_stat, p_value = stats.ttest_ind(group0_data, group1_data)
+            else:
+                t_stat, p_value = stats.ttest_ind(group0_data.values, group1_data.values)
             
             # Effect size (Cohen's d)
             pooled_std = np.sqrt(((len(group0_data)-1)*group0_data.var() + 
@@ -362,8 +416,12 @@ class InteractiveAnalyzer:
             ci_lower = diff - 1.96 * se_diff
             ci_upper = diff + 1.96 * se_diff
             
+            test_type = 'Independent t-test'
+            if not SCIPY_AVAILABLE:
+                test_type += ' (fallback implementation)'
+            
             results.update({
-                'test_type': 'Independent t-test',
+                'test_type': test_type,
                 'test_statistic': t_stat,
                 'p_value': p_value,
                 'effect_size': cohens_d,
@@ -373,8 +431,8 @@ class InteractiveAnalyzer:
                 'significant': p_value < 0.05
             })
             
-            # ANCOVA if covariates specified
-            if covariates and len(covariates) > 0:
+            # ANCOVA if covariates specified and statsmodels available
+            if covariates and len(covariates) > 0 and STATSMODELS_AVAILABLE:
                 try:
                     # Build formula with proper column name handling
                     clean_covariates = [c for c in covariates if c in clean_data.columns]
@@ -411,12 +469,14 @@ class InteractiveAnalyzer:
                 except Exception as e:
                     results['ancova_error'] = str(e)
             
+            elif covariates and len(covariates) > 0 and not STATSMODELS_AVAILABLE:
+                results['ancova_error'] = "ANCOVA requires statsmodels (not available in fallback mode)"
+            
             return results
             
         except Exception as e:
             return {"error": f"Analysis error: {str(e)}"}
 
-# Rest of your main() function remains the same...
 def main():
     # Header
     st.markdown("""
@@ -425,6 +485,13 @@ def main():
         🎛️ Real-time Data Exploration • Dynamic Analysis • JMP/STATA-level Control
     </div>
     """, unsafe_allow_html=True)
+    
+    # Show deployment info
+    if not SCIPY_AVAILABLE or not STATSMODELS_AVAILABLE:
+        st.info("""
+        📢 **Note:** Some statistical libraries are running in fallback mode. 
+        Core functionality is still available, but some advanced features may be limited.
+        """)
     
     # Initialize analyzer
     analyzer = InteractiveAnalyzer()
@@ -462,12 +529,11 @@ def main():
     
     # Main interface tabs
     if st.session_state.original_data is not None:
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4 = st.tabs([
             "🎛️ Interactive Filters", 
             "📊 Data Explorer", 
             "📈 Visualizations", 
-            "🔬 Statistical Analysis",
-            "📥 Export & Reports"
+            "🔬 Statistical Analysis"
         ])
         
         with tab1:
@@ -524,7 +590,7 @@ def main():
             else:
                 st.info("No suitable categorical variables found for filtering")
         
-        # ... (rest of your tabs remain the same) ...
+        # ... (rest of the tabs - similar to previous version)
         
     else:
         # Welcome screen when no data is loaded
@@ -559,44 +625,20 @@ def main():
             
             **🔬 Statistical Analysis:**
             - Independent t-tests
-            - ANCOVA with covariates
+            - ANCOVA with covariates (when available)
             - Effect size calculations
             - Confidence intervals
             
-            **📥 Export Options:**
-            - Filtered datasets
-            - Analysis reports
-            - Publication-ready results
+            **🌐 Cloud-Optimized:**
+            - Robust fallback systems
+            - Works with limited dependencies
+            - Fast deployment
             
             **🎯 JMP/STATA-level Control:**
             - Interactive data exploration
             - Real-time hypothesis testing
             - Professional statistical output
             """)
-        
-        # Example data format
-        st.markdown("### 📋 **Expected Data Format:**")
-        
-        example_data = {
-            'id': [1, 2, 3, 4, 5],
-            'age': [45, 52, 38, 61, 29],
-            'sex': ['F', 'M', 'F', 'M', 'F'],
-            'group': [0, 1, 0, 1, 0],
-            'pk1_severity': [8.5, 7.2, 9.1, 6.8, 8.0],
-            'pk2_severity': [6.2, 4.1, 8.9, 3.5, 7.2],
-            'response': [1, 1, 0, 1, 0]
-        }
-        
-        example_df = pd.DataFrame(example_data)
-        st.dataframe(example_df, use_container_width=True)
-        
-        st.markdown("""
-        **With this data, you could interactively:**
-        - Filter by age groups (e.g., >50 vs ≤50)
-        - Compare treatment groups dynamically
-        - Analyze outcomes with/without baseline adjustment
-        - Export filtered subsets for further analysis
-        """)
 
 if __name__ == "__main__":
     main()
