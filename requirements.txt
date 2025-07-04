@@ -1,34 +1,34 @@
 # OpenClinical Core Engine v2.0 Requirements
-# Open Source Clinical Research Platform
-# Updated with compatible versions to fix statsmodels/scipy conflicts
+# Optimized for Streamlit Cloud deployment
+# Uses pre-compiled wheels to avoid build issues
 
 # Core web framework
-streamlit>=1.28.0,<2.0.0
+streamlit>=1.28.0
 
 # Data manipulation and analysis
-pandas>=1.5.0,<3.0.0
-numpy>=1.21.0,<2.0.0
+pandas>=1.5.0
+numpy>=1.21.0
 
-# Statistical computing - Fixed compatibility versions
-scipy>=1.9.0,<1.14.0
-statsmodels>=0.13.5,<0.15.0
+# Statistical computing - Use older stable versions with pre-compiled wheels
+scipy==1.11.4
+statsmodels==0.14.0
 
 # Visualization
-plotly>=5.0.0,<6.0.0
-matplotlib>=3.5.0,<4.0.0
+plotly>=5.0.0
+matplotlib>=3.5.0
 
 # Excel file support
-openpyxl>=3.0.0,<4.0.0
-xlrd>=2.0.1,<3.0.0
+openpyxl>=3.0.0
+xlrd>=2.0.1
 
 # Performance optimization
-cachetools>=5.0.0,<6.0.0
+cachetools>=5.0.0
 
 # Optional AI integration
-requests>=2.28.0,<3.0.0
+requests>=2.28.0
 
 # Additional utilities
-python-dateutil>=2.8.0,<3.0.0
+python-dateutil>=2.8.0
 
-# Additional statistical packages for robustness
-patsy>=0.5.0,<1.0.0
+# Statistical dependencies (ensure compatibility)
+patsy>=0.5.0
